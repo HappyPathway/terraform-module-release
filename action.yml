@@ -70,14 +70,19 @@ runs:
         git push
         echo "committed=true" >> $GITHUB_OUTPUT
 
-    - name: Get PR Title
+    - name: Get Version Info from Event
       if: steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true'
       shell: bash
-      id: pr-title
+      id: version-info
       run: |
-        PR_TITLE=$(gh pr view --json title -q .title ${{ github.event.pull_request.number }})
-        if [[ $PR_TITLE =~ ^(Major|Minor|Patch) ]]; then
-          echo "increment=$(echo $PR_TITLE | cut -d' ' -f1 | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+        if [[ "${{ github.event_name }}" == "pull_request" ]]; then
+          MESSAGE=$(gh pr view --json title -q .title ${{ github.event.pull_request.number }})
+        else
+          MESSAGE=$(git log -1 --pretty=%B)
+        fi
+        
+        if [[ $MESSAGE =~ ^(Major|Minor|Patch) ]]; then
+          echo "increment=$(echo $MESSAGE | cut -d' ' -f1 | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
           echo "valid=true" >> $GITHUB_OUTPUT
         else
           echo "valid=false" >> $GITHUB_OUTPUT
@@ -86,7 +91,7 @@ runs:
         GH_TOKEN: ${{ inputs.github-token }}
 
     - name: Get Latest Tag
-      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
       shell: bash
       id: get-latest-tag
       run: |
@@ -99,14 +104,14 @@ runs:
         fi
 
     - name: Calculate New Version
-      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
       shell: bash
       id: version
       run: |
         CURRENT_VERSION=$(echo "${{ steps.get-latest-tag.outputs.tag }}" | sed 's/v//')
         IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
         
-        case "${{ steps.pr-title.outputs.increment }}" in
+        case "${{ steps.version-info.outputs.increment }}" in
           "major")
             NEW_VERSION="$((major + 1)).0.0"
             ;;
@@ -120,14 +125,14 @@ runs:
         echo "new_version=v${NEW_VERSION}" >> $GITHUB_OUTPUT
 
     - name: Create and Push Tag
-      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
       shell: bash
       run: |
         git tag ${{ steps.version.outputs.new_version }}
         git push origin ${{ steps.version.outputs.new_version }}
 
     - name: Create GitHub Release
-      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
       shell: bash
       run: |
         gh release create ${{ steps.version.outputs.new_version }} \
