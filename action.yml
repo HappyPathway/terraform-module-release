@@ -86,29 +86,47 @@ runs:
           echo "valid=true" >> $GITHUB_OUTPUT
         else
           echo "valid=false" >> $GITHUB_OUTPUT
+          echo "::error::Commit message or PR title must start with 'Major:', 'Minor:', or 'Patch:'"
+          exit 0
         fi
       env:
         GH_TOKEN: ${{ inputs.github-token }}
 
     - name: Get Latest Tag
-      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true'
       shell: bash
       id: get-latest-tag
       run: |
         git fetch --tags
-        LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+        # Get all version tags and sort them numerically by version components
+        LATEST_TAG=$(git tag -l | grep -E '^v?[0-9]+\.[0-9]+\.[0-9]+$' | sed 's/^v//' | sort -t. -k1,1n -k2,2n -k3,3n | tail -n1)
         if [ -z "$LATEST_TAG" ]; then
-          echo "tag=v0.0.0" >> $GITHUB_OUTPUT
-        else
-          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+          LATEST_TAG="0.0.0"
         fi
+        
+        # Check if any tags have v prefix to maintain consistency
+        V_PREFIX_EXISTS=$(git tag -l | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | wc -l)
+        if [ "$V_PREFIX_EXISTS" -gt 0 ]; then
+          LATEST_TAG="v${LATEST_TAG}"
+        fi
+        echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        echo "Found latest version: $LATEST_TAG" 
 
     - name: Calculate New Version
-      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true'
       shell: bash
       id: version
       run: |
-        CURRENT_VERSION=$(echo "${{ steps.get-latest-tag.outputs.tag }}" | sed 's/v//')
+        # Extract version number, handling both N.N.N and vN.N.N formats
+        CURRENT_VERSION=$(echo "${{ steps.get-latest-tag.outputs.tag }}" | sed 's/^v//')
+        # Save if original had v prefix
+        [[ "${{ steps.get-latest-tag.outputs.tag }}" =~ ^v ]] && HAS_V_PREFIX=true || HAS_V_PREFIX=false
+        
+        if [[ ! $CURRENT_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Invalid version format: $CURRENT_VERSION"
+          exit 1
+        fi
+        
         IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
         
         case "${{ steps.version-info.outputs.increment }}" in
@@ -121,21 +139,44 @@ runs:
           "patch")
             NEW_VERSION="${major}.${minor}.$((patch + 1))"
             ;;
+          *)
+            echo "::error::Invalid increment type: ${{ steps.version-info.outputs.increment }}"
+            exit 1
+            ;;
         esac
-        echo "new_version=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+        
+        if [[ ! $NEW_VERSION =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Invalid new version format: $NEW_VERSION"
+          exit 1
+        fi
+        
+        # Maintain the same prefix style as the latest tag
+        if [[ "$HAS_V_PREFIX" == "true" ]]; then
+          echo "new_version=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+        else
+          echo "new_version=${NEW_VERSION}" >> $GITHUB_OUTPUT
+        fi
 
     - name: Create and Push Tag
-      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true'
       shell: bash
       run: |
-        git tag ${{ steps.version.outputs.new_version }}
-        git push origin ${{ steps.version.outputs.new_version }}
+        if [[ ! "${{ steps.version.outputs.new_version }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Invalid version tag format: ${{ steps.version.outputs.new_version }}"
+          exit 1
+        fi
+        git tag "${{ steps.version.outputs.new_version }}"
+        git push origin "${{ steps.version.outputs.new_version }}"
 
     - name: Create GitHub Release
-      if: steps.version-info.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      if: steps.version-info.outputs.valid == 'true'
       shell: bash
       run: |
-        gh release create ${{ steps.version.outputs.new_version }} \
+        if [[ ! "${{ steps.version.outputs.new_version }}" =~ ^v?[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+          echo "::error::Invalid version tag format for release: ${{ steps.version.outputs.new_version }}"
+          exit 1
+        fi
+        gh release create "${{ steps.version.outputs.new_version }}" \
           --title "${{ steps.version.outputs.new_version }}" \
           --generate-notes
       env:
