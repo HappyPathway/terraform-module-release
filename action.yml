@@ -1,7 +1,7 @@
 name: 'Terraform Module Release Action'
 description: 'Validates, tests, formats Terraform code and handles semantic versioning based on PR title'
 author: 'actions@happypathway.com'
-icon: 'box'
+icon: 'bar-chart-2'
 color: 'purple'
 
 inputs:
