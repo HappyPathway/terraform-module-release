@@ -1,0 +1,135 @@
+name: 'Terraform Module Release Action'
+description: 'Validates, tests, formats Terraform code and handles semantic versioning based on PR title'
+author: 'GitHub Actions'
+
+inputs:
+  github-token:
+    description: 'GitHub token for creating commits, tags, and releases'
+    required: true
+  working-directory:
+    description: 'Directory containing Terraform code'
+    required: false
+    default: '.'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Check for skip flags
+      shell: bash
+      id: skip-check
+      run: |
+        SKIP_TEST=false
+        COMMIT_MSG="${{ github.event.pull_request.title }} ${{ github.event.pull_request.body }}"
+        if [[ $COMMIT_MSG =~ \[skip[[:space:]]*ci\]|\[skip[[:space:]]*test\] ]]; then
+          SKIP_TEST=true
+        fi
+        echo "skip_test=$SKIP_TEST" >> $GITHUB_OUTPUT
+
+    - name: Terraform Init
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform init
+
+    - name: Terraform Validate
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform validate
+
+    - name: Terraform Test
+      if: steps.skip-check.outputs.skip_test != 'true'
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform test
+
+    - name: Terraform Format
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: terraform fmt -recursive
+
+    - name: Check for formatting changes
+      shell: bash
+      id: git-check
+      run: |
+        if [[ -n "$(git status --porcelain)" ]]; then
+          echo "changes=true" >> $GITHUB_OUTPUT
+        else
+          echo "changes=false" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Commit formatting changes
+      if: steps.git-check.outputs.changes == 'true'
+      shell: bash
+      id: commit-format
+      run: |
+        git config --local user.email "github-actions[bot]@users.noreply.github.com"
+        git config --local user.name "github-actions[bot]"
+        git add .
+        git commit -m "style: Terraform formatting changes [skip ci] [skip test]"
+        git push
+        echo "committed=true" >> $GITHUB_OUTPUT
+
+    - name: Get PR Title
+      if: steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true'
+      shell: bash
+      id: pr-title
+      run: |
+        PR_TITLE=$(gh pr view --json title -q .title ${{ github.event.pull_request.number }})
+        if [[ $PR_TITLE =~ ^(Major|Minor|Patch) ]]; then
+          echo "increment=$(echo $PR_TITLE | cut -d' ' -f1 | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+          echo "valid=true" >> $GITHUB_OUTPUT
+        else
+          echo "valid=false" >> $GITHUB_OUTPUT
+        fi
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
+
+    - name: Get Latest Tag
+      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      shell: bash
+      id: get-latest-tag
+      run: |
+        git fetch --tags
+        LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
+        if [ -z "$LATEST_TAG" ]; then
+          echo "tag=v0.0.0" >> $GITHUB_OUTPUT
+        else
+          echo "tag=$LATEST_TAG" >> $GITHUB_OUTPUT
+        fi
+
+    - name: Calculate New Version
+      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      shell: bash
+      id: version
+      run: |
+        CURRENT_VERSION=$(echo "${{ steps.get-latest-tag.outputs.tag }}" | sed 's/v//')
+        IFS='.' read -r major minor patch <<< "$CURRENT_VERSION"
+        
+        case "${{ steps.pr-title.outputs.increment }}" in
+          "major")
+            NEW_VERSION="$((major + 1)).0.0"
+            ;;
+          "minor")
+            NEW_VERSION="${major}.$((minor + 1)).0"
+            ;;
+          "patch")
+            NEW_VERSION="${major}.${minor}.$((patch + 1))"
+            ;;
+        esac
+        echo "new_version=v${NEW_VERSION}" >> $GITHUB_OUTPUT
+
+    - name: Create and Push Tag
+      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      shell: bash
+      run: |
+        git tag ${{ steps.version.outputs.new_version }}
+        git push origin ${{ steps.version.outputs.new_version }}
+
+    - name: Create GitHub Release
+      if: steps.pr-title.outputs.valid == 'true' && (steps.git-check.outputs.changes != 'true' || steps.commit-format.outputs.committed != 'true')
+      shell: bash
+      run: |
+        gh release create ${{ steps.version.outputs.new_version }} \
+          --title "${{ steps.version.outputs.new_version }}" \
+          --generate-notes
+      env:
+        GH_TOKEN: ${{ inputs.github-token }}
