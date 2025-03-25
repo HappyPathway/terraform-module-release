@@ -25,16 +25,13 @@ You can skip tests by including one of these flags in your PR title or body:
 This is particularly useful for formatting-only changes where running tests isn't necessary.
 
 ### Example Workflow
-
 ```yaml
 name: Terraform CI/CD
-
 on:
   pull_request:
     types: [closed]
     branches:
       - main
-
 jobs:
   terraform-ci-cd:
     if: github.event.pull_request.merged == true
@@ -47,12 +44,16 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Setup Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.10.5"  # Specify your desired version
+
       - name: Run Terraform Module Release Action
-        uses: your-org/terraform-module-release@v1
+        uses: HappyPathway/terraform-module-release@main
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           working-directory: '.'
-
 ```
 
 ## Inputs
