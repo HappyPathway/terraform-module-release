@@ -1,7 +1,8 @@
 name: 'Terraform Module Release Action'
 description: 'Validates, tests, formats Terraform code and handles semantic versioning based on PR title'
 author: 'actions@happypathway.com'
-icon: 'award'
+icon: 'box'
+color: 'purple'
 
 inputs:
   github-token:
